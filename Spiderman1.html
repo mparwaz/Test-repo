@@ -2885,6 +2885,167 @@ if (grid) {
 window.ExtOrient = { fix, vw: () => rotOn ? H() : W(), vh: () => rotOn ? W() : H(), get rotated() { return rotOn; } };
 apply();
 })();
+        (function () {
+'use strict';
+const MU = THREE.MathUtils;
+const $ = id => document.getElementById(id);
+ 
+/* ---------------- 1) SPIDER EMBLEM ---------------- */
+function drawSpider() {
+    const c = document.createElement('canvas'); c.width = c.height = 256;
+    const g = c.getContext('2d');
+    g.strokeStyle = '#fff'; g.fillStyle = '#fff'; g.lineWidth = 11; g.lineCap = 'round'; g.lineJoin = 'round';
+    const legs = [
+        [[138, 98], [172, 58], [216, 42]], [[140, 114], [188, 90], [234, 96]],
+        [[140, 134], [192, 140], [230, 168]], [[136, 152], [176, 180], [208, 226]]
+    ];
+    legs.forEach(l => [1, -1].forEach(s => {
+        g.beginPath();
+        l.forEach((p, i) => { const x = s === 1 ? p[0] : 256 - p[0]; if (i) g.lineTo(x, p[1]); else g.moveTo(x, p[1]); });
+        g.stroke();
+    }));
+    g.beginPath(); g.ellipse(128, 168, 27, 44, 0, 0, Math.PI * 2); g.fill();     // abdomen
+    g.beginPath(); g.ellipse(128, 140, 11, 14, 0, 0, Math.PI * 2); g.fill();     // waist
+    g.beginPath(); g.ellipse(128, 108, 17, 20, 0, 0, Math.PI * 2); g.fill();     // head
+    const t = new THREE.CanvasTexture(c); t.anisotropy = 4; return t;
+}
+const spiderTex = drawSpider();
+const emblemMat = new THREE.MeshStandardMaterial({
+    map: spiderTex, emissiveMap: spiderTex, color: 0x0a0a10, emissive: 0x000000, emissiveIntensity: 0,
+    roughness: 0.55, metalness: 0.1, alphaTest: 0.45, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2
+});
+const chestEmblem = new THREE.Mesh(new THREE.PlaneGeometry(0.6, 0.6), emblemMat);
+chestEmblem.position.set(0, 0.14, 0.281); torso.add(chestEmblem);
+const backEmblem = new THREE.Mesh(new THREE.PlaneGeometry(0.72, 0.72), emblemMat);
+backEmblem.position.set(0, 0.08, -0.281); backEmblem.rotation.y = Math.PI; torso.add(backEmblem);
+ 
+const EMB = {
+    classic: { c: 0x0a0a10, e: 0x000000, i: 0 },
+    stealth: { c: 0x10b981, e: 0x10b981, i: 1.1 },
+    iron: { c: 0x3a0d0d, e: 0x450a0a, i: 0.25 },
+    symbiote: { c: 0xf8fafc, e: 0xf8fafc, i: 0.25 }
+};
+function setEmblem(k) {
+    const p = EMB[k] || EMB.classic;
+    emblemMat.color.setHex(p.c); emblemMat.emissive.setHex(p.e); emblemMat.emissiveIntensity = p.i;
+}
+ 
+/* ---------------- 3) SUIT INFO PANEL ---------------- */
+const INFO = {
+    classic: { d: 'Balanced mobility and high web-fluid tension capacity.', sp: [95, 85], rg: [120, 80], ag: [90, 90] },
+    stealth: { d: 'Tactical dark fabric with reactive neon accents. Whisper-quiet swings and elite wall agility.', sp: [88, 78], rg: [105, 70], ag: [98, 98] },
+    iron: { d: 'Gold-plated nano-mesh armor. Longest web tension range, heavier feel.', sp: [102, 92], rg: [150, 100], ag: [82, 82] },
+    symbiote: { d: 'Organic matte shell that adapts mid-swing. Raw speed and aggression.', sp: [110, 98], rg: [110, 75], ag: [94, 94] }
+};
+function setInfo(k) {
+    const i = INFO[k]; if (!i) return;
+    const set = (id, txt) => { const e = $(id); if (e) e.textContent = txt; };
+    const bar = (id, w) => { const e = $(id); if (e) e.style.width = w + '%'; };
+    set('suit-desc', i.d);
+    set('stat-speed-val', i.sp[0] + ' MPH'); bar('stat-speed-bar', i.sp[1]);
+    set('stat-range-val', i.rg[0] + 'm'); bar('stat-range-bar', i.rg[1]);
+    set('stat-agility-val', i.ag[0] + '%'); bar('stat-agility-bar', i.ag[1]);
+}
+ 
+/* ---------------- 2) HOLOGRAM VIEWER ---------------- */
+const css = document.createElement('style');
+css.textContent = `
+#holo-stage{position:relative;width:100%;height:clamp(220px,38vh,420px);margin-bottom:.5rem;border:1px solid rgba(34,211,238,.3);border-radius:14px;overflow:hidden;background:radial-gradient(ellipse at 50% 92%,rgba(0,210,255,.24),rgba(2,6,23,.62) 65%);box-shadow:inset 0 0 30px rgba(0,210,255,.15)}
+#holo-stage::after{content:'';position:absolute;inset:0;pointer-events:none;background:repeating-linear-gradient(0deg,rgba(255,255,255,.045) 0,rgba(255,255,255,.045) 1px,transparent 1px,transparent 3px)}
+#holo-stage canvas{width:100%;height:100%;display:block;touch-action:none;cursor:grab}
+#holo-tag{position:absolute;top:.45rem;left:.7rem;z-index:2;pointer-events:none;font:700 10px Rajdhani,sans-serif;letter-spacing:.18em;color:#67e8f9;text-shadow:0 0 8px rgba(0,210,255,.8)}`;
+document.head.appendChild(css);
+ 
+const TINT = { classic: 0xff3355, stealth: 0x10b981, iron: 0xfbbf24, symbiote: 0xe2e8f0 };
+let showcase = null;
+function buildShowcase() {
+    const mid = document.querySelector('#screen-suit-gallery .text-center'); if (!mid) return null;
+    const stage = document.createElement('div'); stage.id = 'holo-stage';
+    const cv = document.createElement('canvas'); stage.appendChild(cv);
+    const tag = document.createElement('div'); tag.id = 'holo-tag'; tag.textContent = 'HOLO-PROJECTOR // LIVE'; stage.appendChild(tag);
+    mid.insertBefore(stage, mid.firstChild);
+ 
+    const r = new THREE.WebGLRenderer({ canvas: cv, antialias: true, alpha: true });
+    r.setClearColor(0x000000, 0); r.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    const sc = new THREE.Scene();
+    const cam = new THREE.PerspectiveCamera(32, 1, 0.1, 60);
+    sc.add(new THREE.AmbientLight(0x9fb8ff, 0.95));
+    const key = new THREE.DirectionalLight(0xffffff, 1.6); key.position.set(3, 5, 4); sc.add(key);
+    const rim = new THREE.DirectionalLight(0xff3355, 1.1); rim.position.set(-4, 2, -3); sc.add(rim);
+    const glow = new THREE.PointLight(0x00d2ff, 1.3, 12); glow.position.set(0, 0.2, 2.2); sc.add(glow);
+ 
+    // live copy of the player model (shares geometry + materials, so suit changes show instantly)
+    const model = playerGroup.clone(true);
+    model.position.set(0, -0.025, 0); model.rotation.set(0, 0, 0); sc.add(model);
+    const tor = model.children[0];
+    if (tor) {
+        tor.rotation.set(0, 0, 0); tor.position.y = 1.25;
+        if (tor.children[1]) tor.children[1].rotation.set(0, 0, -0.2);   // left arm out a little
+        if (tor.children[2]) tor.children[2].rotation.set(0, 0, 0.2);    // right arm
+        if (tor.children[3]) tor.children[3].rotation.set(0, 0, -0.08);  // legs
+        if (tor.children[4]) tor.children[4].rotation.set(0, 0, 0.08);
+    }
+ 
+    // projector base, rings, beam, scan line, particles
+    const add = (geo, mat, y) => { const m = new THREE.Mesh(geo, mat); m.position.y = y; sc.add(m); return m; };
+    const holoMat = (c, o) => new THREE.MeshBasicMaterial({ color: c, transparent: true, opacity: o, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide });
+    add(new THREE.CylinderGeometry(1.5, 1.7, 0.08, 48), new THREE.MeshStandardMaterial({ color: 0x0b1a2a, metalness: 0.8, roughness: 0.3 }), -0.31);
+    const rings = [1.55, 1.25, 0.95].map((rad, i) => {
+        const m = add(new THREE.TorusGeometry(rad, 0.014, 8, 96), holoMat(0x22d3ee, 0.8), -0.265); m.rotation.x = Math.PI / 2; m.userData.i = i; return m;
+    });
+    const beam = add(new THREE.CylinderGeometry(1.4, 1.4, 3.2, 48, 1, true), holoMat(0x22d3ee, 0.07), 1.3);
+    const scan = add(new THREE.TorusGeometry(1.2, 0.02, 8, 64), holoMat(0x99f6ff, 0.7), 0); scan.rotation.x = Math.PI / 2;
+    const PN = 120, pp = new Float32Array(PN * 3);
+    for (let i = 0; i < PN; i++) { const a = Math.random() * 6.283, rr = Math.sqrt(Math.random()) * 1.3; pp[i * 3] = Math.cos(a) * rr; pp[i * 3 + 1] = Math.random() * 3; pp[i * 3 + 2] = Math.sin(a) * rr; }
+    const pg = new THREE.BufferGeometry(); pg.setAttribute('position', new THREE.BufferAttribute(pp, 3));
+    const pts = new THREE.Points(pg, new THREE.PointsMaterial({ color: 0x67e8f9, size: 0.035, transparent: true, opacity: 0.8, blending: THREE.AdditiveBlending, depthWrite: false }));
+    pts.position.y = -0.25; sc.add(pts);
+ 
+    // drag / swipe to rotate
+    let yaw = 0, pitch = 0, dragging = false, lx = 0, ly = 0, hold = 0;
+    cv.addEventListener('pointerdown', e => { dragging = true; lx = e.clientX; ly = e.clientY; hold = 3; try { cv.setPointerCapture(e.pointerId); } catch (_) {} cv.style.cursor = 'grabbing'; });
+    cv.addEventListener('pointermove', e => {
+        if (!dragging) return;
+        yaw += (e.clientX - lx) * 0.012; pitch = MU.clamp(pitch + (e.clientY - ly) * 0.004, -0.25, 0.3); lx = e.clientX; ly = e.clientY; hold = 3;
+    });
+    const up = () => { dragging = false; cv.style.cursor = 'grab'; };
+    cv.addEventListener('pointerup', up); cv.addEventListener('pointercancel', up);
+ 
+    let lw = 0, lh = 0, last = performance.now(), t = 0;
+    function fit() {
+        const w = stage.clientWidth, h = stage.clientHeight;
+        if (!w || !h || (w === lw && h === lh)) return;
+        lw = w; lh = h; r.setSize(w, h, false); cam.aspect = w / h;
+        cam.position.set(0, 1.4, 6.4 * Math.max(1, 0.85 / cam.aspect)); cam.lookAt(0, 1.0, 0); cam.updateProjectionMatrix();
+    }
+    function loop(now) {
+        requestAnimationFrame(loop);
+        if (gameState !== 'SUIT_GALLERY') { last = now; return; }          // only draws while the gallery is open
+        const dt = Math.min((now - last) / 1000, 0.05); last = now; t += dt;
+        fit(); if (!lw) return;
+        if (hold > 0) hold -= dt; else yaw += dt * 0.7;                     // auto-spin unless you're dragging
+        model.rotation.y = yaw; model.rotation.x = pitch; model.position.y = -0.025 + Math.sin(t * 1.6) * 0.025;
+        rings.forEach(m => { const s = 1 + Math.sin(t * 2 + m.userData.i) * 0.03; m.scale.set(s, s, 1); m.material.opacity = 0.55 + 0.35 * Math.sin(t * 3 + m.userData.i * 1.5); });
+        beam.material.opacity = 0.055 + 0.03 * Math.sin(t * 9) * Math.random();
+        const sy = ((t * 0.7) % 1); scan.position.y = -0.25 + sy * 2.7; scan.material.opacity = 0.7 * (1 - sy);
+        const a = pg.attributes.position.array;
+        for (let i = 0; i < PN; i++) { a[i * 3 + 1] += dt * 0.35; if (a[i * 3 + 1] > 3) a[i * 3 + 1] = 0; }
+        pg.attributes.position.needsUpdate = true;
+        r.render(sc, cam);
+    }
+    requestAnimationFrame(loop);
+    return { setTint(k) { rim.color.setHex(TINT[k] || 0xff3355); rings[2].material.color.setHex(TINT[k] || 0x22d3ee); } };
+}
+try { showcase = buildShowcase(); } catch (err) { console.error('[suit hologram]', err); }
+ 
+/* ---------------- Hook the existing suit switcher (original still runs first) ---------------- */
+const _apply = applySuit;
+applySuit = function (k) {
+    _apply(k);
+    try { setEmblem(k); setInfo(k); if (showcase) showcase.setTint(k); } catch (e) { console.error(e); }
+};
+setEmblem(currentSuit); setInfo(currentSuit); if (showcase) showcase.setTint(currentSuit);
+})();
     </script>
 </body>
 </html>
