@@ -2741,6 +2741,149 @@ if (grid) {
     $('xs-reset-hud').addEventListener('click', () => { resetLayout(); toast('HUD layout reset'); });
 }
 })();
+        (function () {
+'use strict';
+const $ = id => document.getElementById(id);
+const KEY = 'spiderman_orient_v1';
+const cfg = { mode: 'vertical', dir: 1 };          // dir 1 = rotate clockwise, -1 = counter-clockwise
+try { Object.assign(cfg, JSON.parse(localStorage.getItem(KEY) || '{}')); } catch (e) {}
+if (cfg.mode !== 'horizontal') cfg.mode = 'vertical';
+cfg.dir = cfg.dir === -1 ? -1 : 1;
+const persist = () => { try { localStorage.setItem(KEY, JSON.stringify(cfg)); } catch (e) {} };
+const toast = m => { try { showToast(m); } catch (e) {} };
+let rotOn = false, fsByUs = false;
+const W = () => window.innerWidth, H = () => window.innerHeight;
+ 
+/* ---------------- CSS ---------------- */
+const css = document.createElement('style');
+const pad = (t, r, b, l) => 'padding-top:max(.75rem,env(safe-area-inset-' + t + '))!important;padding-right:max(.75rem,env(safe-area-inset-' + r + '))!important;padding-bottom:max(.75rem,env(safe-area-inset-' + b + '))!important;padding-left:max(.75rem,env(safe-area-inset-' + l + '))!important;';
+const SCR = '#screen-hud,body.ext-rot #screen-main-menu,body.ext-rot #screen-suit-gallery,body.ext-rot #screen-settings,body.ext-rot #screen-pause,body.ext-rot #modal-quit';
+css.textContent = `
+body.ext-rot{position:fixed!important;left:0!important;top:0!important;transform-origin:0 0!important;overflow:hidden!important}
+body.ext-rot-cw{transform:rotate(90deg) translateY(-100%)!important}
+body.ext-rot-ccw{transform:rotate(-90deg) translateX(-100%)!important}
+body.ext-rot-cw ${SCR}{${pad('right', 'bottom', 'left', 'top')}}
+body.ext-rot-ccw ${SCR}{${pad('left', 'top', 'right', 'bottom')}}
+body.ext-rot #screen-main-menu,body.ext-rot #screen-suit-gallery,body.ext-rot #screen-settings,body.ext-rot #screen-pause,body.ext-rot #modal-quit{touch-action:pan-x pan-y!important}
+body.ext-rot #screen-suit-gallery > .grid{grid-template-columns:repeat(3,minmax(0,1fr))}
+body.ext-rot #screen-settings .max-w-4xl{grid-template-columns:repeat(2,minmax(0,1fr))}
+body.ext-rot #screen-settings .max-w-4xl > .md\\:col-span-2{grid-column:span 2 / span 2}
+body.ext-rot.ext-short #joystick-container{transform:scale(.8);transform-origin:bottom left}
+body.ext-rot.ext-short #mobile-controls > div:last-child{transform:scale(.85);transform-origin:bottom right}`;
+document.head.appendChild(css);
+ 
+/* ---------------- Coordinate mapping (screen <-> rotated game space) ---------------- */
+const toLocal = (X, Y) => cfg.dir === 1 ? { x: Y, y: W() - X } : { x: H() - Y, y: X };
+const done = new WeakSet();
+function getter(o, name) {
+    let p = Object.getPrototypeOf(o);
+    while (p) { const d = Object.getOwnPropertyDescriptor(p, name); if (d && d.get) return d.get; p = Object.getPrototypeOf(p); }
+    return null;
+}
+function fixPoint(o) {
+    if (done.has(o)) return; done.add(o);
+    const gx = getter(o, 'clientX'), gy = getter(o, 'clientY'); if (!gx || !gy) return;
+    const lx = () => rotOn ? toLocal(gx.call(o), gy.call(o)).x : gx.call(o);
+    const ly = () => rotOn ? toLocal(gx.call(o), gy.call(o)).y : gy.call(o);
+    ['clientX', 'pageX'].forEach(n => { try { Object.defineProperty(o, n, { configurable: true, get: lx }); } catch (e) {} });
+    ['clientY', 'pageY'].forEach(n => { try { Object.defineProperty(o, n, { configurable: true, get: ly }); } catch (e) {} });
+}
+function fix(e) {
+    if (!rotOn || done.has(e)) return; done.add(e);
+    if (e.changedTouches) {
+        [e.touches, e.changedTouches, e.targetTouches].forEach(l => { if (l) for (let i = 0; i < l.length; i++) fixPoint(l[i]); });
+    } else if ('clientX' in e) fixPoint(e);
+}
+['touchstart', 'touchmove', 'touchend', 'touchcancel', 'mousedown', 'mousemove', 'mouseup', 'click', 'pointerdown', 'pointermove', 'pointerup', 'pointercancel']
+    .forEach(t => window.addEventListener(t, fix, { capture: true, passive: true }));
+ 
+const _gbcr = Element.prototype.getBoundingClientRect;
+Element.prototype.getBoundingClientRect = function () {
+    const r = _gbcr.call(this); if (!rotOn) return r;
+    if (cfg.dir === 1) return new DOMRect(r.top, W() - r.right, r.height, r.width);
+    return new DOMRect(H() - r.bottom, r.left, r.height, r.width);
+};
+const _efp = document.elementFromPoint.bind(document);
+document.elementFromPoint = function (x, y) {
+    if (!rotOn) return _efp(x, y);
+    return cfg.dir === 1 ? _efp(W() - y, x) : _efp(y, H() - x);
+};
+ 
+/* ---------------- Apply the current mode ---------------- */
+function apply() {
+    const b = document.body, cl = b.classList, was = rotOn;
+    const want = cfg.mode === 'horizontal' && H() > W();
+    rotOn = want;
+    cl.toggle('ext-h', cfg.mode === 'horizontal'); cl.toggle('ext-v', cfg.mode === 'vertical');
+    cl.toggle('ext-rot', rotOn); cl.toggle('ext-rot-cw', rotOn && cfg.dir === 1); cl.toggle('ext-rot-ccw', rotOn && cfg.dir === -1);
+    cl.toggle('ext-short', rotOn && W() <= 520);
+    if (rotOn) {
+        b.style.setProperty('width', H() + 'px', 'important'); b.style.setProperty('height', W() + 'px', 'important');
+        document.documentElement.style.background = '#0b0e14';
+    } else if (was) {
+        b.style.removeProperty('width'); b.style.removeProperty('height'); document.documentElement.style.background = '';
+    }
+    if (rotOn || was) {                                   // keep renderer + camera matched to the (rotated) game space
+        const w = rotOn ? H() : W(), h = rotOn ? W() : H();
+        renderer.setSize(w, h); camera.aspect = w / h; camera.updateProjectionMatrix();
+    }
+    updateUI();
+}
+window.addEventListener('resize', apply);                 // registered after the game's own resize handler, so it wins
+window.addEventListener('orientationchange', () => setTimeout(apply, 250));
+document.addEventListener('fullscreenchange', () => setTimeout(apply, 300));
+ 
+/* ---------------- Native orientation lock (where the browser allows it) ---------------- */
+async function tryLock(kind) {
+    try {
+        if (!document.fullscreenElement && document.documentElement.requestFullscreen) { await document.documentElement.requestFullscreen(); fsByUs = true; }
+        if (screen.orientation && screen.orientation.lock) { await screen.orientation.lock(kind); return true; }
+    } catch (e) {}
+    return false;
+}
+function unlock() {
+    try { if (screen.orientation && screen.orientation.unlock) screen.orientation.unlock(); } catch (e) {}
+    try { if (fsByUs && document.fullscreenElement) { document.exitFullscreen().catch(() => {}); } } catch (e) {}
+    fsByUs = false;
+}
+async function setMode(m) {
+    cfg.mode = m; persist();
+    if (m === 'horizontal') {
+        apply();
+        if (matchMedia('(pointer:coarse)').matches && H() > W()) {
+            const ok = await tryLock('landscape');
+            if (ok) { setTimeout(apply, 600); toast('Horizontal mode: screen locked to landscape'); }
+            else toast('Horizontal mode: turn your phone sideways');
+        } else toast('Horizontal mode on');
+    } else { unlock(); apply(); toast('Vertical mode on'); }
+}
+ 
+/* ---------------- Settings buttons ---------------- */
+const btn = on => 'flex-1 px-4 py-3 rounded font-extrabold uppercase tracking-wider text-sm border-2 transition ' + (on ? 'bg-red-600 border-red-300 text-white' : 'bg-slate-800 border-slate-600 text-slate-200 hover:bg-slate-700');
+function updateUI() {
+    const v = $('xo-v'), h = $('xo-h'); if (!v || !h) return;
+    v.className = btn(cfg.mode === 'vertical'); h.className = btn(cfg.mode === 'horizontal');
+    $('xo-flip').style.display = cfg.mode === 'horizontal' ? '' : 'none';
+    $('xo-status').textContent = cfg.mode === 'vertical' ? 'Vertical mode — portrait layout (default).'
+        : (rotOn ? 'Horizontal mode — view rotated, turn your phone sideways (' + (cfg.dir === 1 ? 'counter-clockwise' : 'clockwise') + ').' : 'Horizontal mode — landscape.');
+}
+const grid = document.querySelector('#screen-settings .max-w-4xl');
+if (grid) {
+    grid.insertAdjacentHTML('beforeend',
+        '<div class="md:col-span-2 bg-slate-900/80 border border-slate-800 rounded-xl p-4 sm:p-6 space-y-4">' +
+        '<h3 class="font-bold text-lg sm:text-xl text-orange-400 uppercase tracking-wider border-b border-slate-800 pb-2 flex items-center gap-2"><i class="fa-solid fa-mobile-screen-button"></i> Screen Mode</h3>' +
+        '<div class="flex gap-3"><button id="xo-v"><i class="fa-solid fa-mobile-screen mr-2"></i>Vertical</button><button id="xo-h"><i class="fa-solid fa-mobile-screen fa-rotate-90 mr-2"></i>Horizontal</button></div>' +
+        '<div id="xo-status" class="text-xs sm:text-sm text-cyan-300 font-semibold"></div>' +
+        '<div class="text-[10px] sm:text-xs text-slate-400">Horizontal locks your screen to landscape when the browser allows it; otherwise the game rotates so you can hold your phone sideways. Wrong way round? Use Flip.</div>' +
+        '<button id="xo-flip" class="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white font-bold rounded uppercase tracking-wider text-xs border border-slate-600"><i class="fa-solid fa-rotate mr-1"></i> Flip Direction</button></div>');
+    $('xo-v').addEventListener('click', () => setMode('vertical'));
+    $('xo-h').addEventListener('click', () => setMode('horizontal'));
+    $('xo-flip').addEventListener('click', () => { cfg.dir = -cfg.dir; persist(); apply(); });
+}
+ 
+window.ExtOrient = { fix, vw: () => rotOn ? H() : W(), vh: () => rotOn ? W() : H(), get rotated() { return rotOn; } };
+apply();
+})();
     </script>
 </body>
 </html>
