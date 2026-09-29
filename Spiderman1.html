@@ -1937,6 +1937,7 @@
         }
 
         animate(performance.now());
+        
         (function () {
 'use strict';
 const V3 = THREE.Vector3, MU = THREE.MathUtils;
@@ -1946,6 +1947,8 @@ const pick = a => a[Math.floor(Math.random() * a.length)];
 const $ = id => document.getElementById(id);
 const inGame = () => gameState === 'GAME';
 const STEP = 84;
+const DENS = { ped: 1, car: 1 };   // population multipliers (1 = default), driven by the Settings screen add-on
+const BASE = { ped: 48, car: 30 };
 const smooth = (a, b, x) => { x = MU.clamp((x - a) / (b - a), 0, 1); return x * x * (3 - 2 * x); };
 const wrapV = (v, c, r) => (v - c > r ? v - 2 * r : (v - c < -r ? v + 2 * r : v));
 const turnTo = (o, t, k) => { let d = t - o.rotation.y; d = Math.atan2(Math.sin(d), Math.cos(d)); o.rotation.y += d * Math.min(1, k); };
@@ -2165,15 +2168,16 @@ function perim(cx, cz, s, h, out) {
     return out;
 }
 const _pa = { x: 0, z: 0 }, _pb = { x: 0, z: 0 };
-for (let n = 0; n < 48; n++) {
+for (let n = 0; n < BASE.ped * 2; n++) {   // pool is 2x so density can go up to 200%
     let ci = ri(-5, 5), cj = ri(-5, 5);
     const h = makeHuman(pick(topMats), pick(legMats), pick(skinMats));
     scene.add(h.g);
     npcs.push({ h, cx: ci * STEP, cz: cj * STEP, s: rnd(0, 8 * 22), dir: Math.random() < 0.5 ? 1 : -1, sp: rnd(2.6, 4.2), r: rnd(20.6, 23.4), ph: rnd(0, 6.28) });
 }
 function updNPCs(dt) {
-    const cp = camera.position;
+    const cp = camera.position, actN = Math.round(BASE.ped * DENS.ped); let ni = 0;
     for (const n of npcs) {
+        if (ni++ >= actN) { n.h.g.visible = false; continue; }
         let sp = n.sp * (1 + 0.5 * Math.min(1, wx.rain));
         if (crime && !crime.done) {
             perim(n.cx, n.cz, n.s, n.r, _pa);
@@ -2216,7 +2220,7 @@ function makeCar() {
     }
     return g;
 }
-for (let n = 0; n < 30; n++) {
+for (let n = 0; n < BASE.car * 2; n++) {
     const g = makeCar(); scene.add(g);
     const c = { g, axis: Math.random() < 0.5 ? 'x' : 'z', dir: Math.random() < 0.5 ? 1 : -1, line: 42 + STEP * ri(-5, 4), pos: rnd(-400, 400), v: 0, cruise: rnd(16, 25), lc: 99, prev: 0 };
     c.prev = c.pos; c.v = c.cruise;
@@ -2226,11 +2230,13 @@ for (let n = 0; n < 30; n++) {
 }
 let carHitCd = 0;
 function updCars(dt) {
-    const cp = camera.position; carHitCd = Math.max(0, carHitCd - dt);
+    const cp = camera.position, actC = Math.round(BASE.car * DENS.car); carHitCd = Math.max(0, carHitCd - dt);
+    cars.forEach((c, i) => { c.on = i < actC; });
     for (const c of cars) {
+        if (!c.on) { c.g.visible = false; continue; }
         const g = c.g, p = g.position;
         let tgt = c.cruise * (1 - 0.22 * Math.min(1, wx.rain)) * (wx.fog > 0.008 ? 0.7 : 1) * (1 - 0.15 * wx.snow);
-        for (const o of cars) if (o !== c && o.axis === c.axis && o.line === c.line && o.dir === c.dir) {
+        for (const o of cars) if (o !== c && o.on && o.axis === c.axis && o.line === c.line && o.dir === c.dir) {
             const gap = (o.pos - c.pos) * c.dir;
             if (gap > 0 && gap < 18) tgt = Math.min(tgt, gap < 11 ? 0 : o.v * 0.9);
         }
@@ -2504,6 +2510,236 @@ renderer.render = function (s, c) {
     } catch (err) { console.error('[city-life add-on]', err); }
     _render(s, c);
 };
+window.CityLife = { DENS, BASE };
+})();
+    
+    (function () {
+'use strict';
+const $ = id => document.getElementById(id);
+const LS = 'spiderman_ui_settings_v1';
+let saved = {};
+try { saved = JSON.parse(localStorage.getItem(LS) || '{}') || {}; } catch (e) { saved = {}; }
+saved.dens = saved.dens || { ped: 100, car: 100 };
+saved.bind = saved.bind || {};
+saved.ui = saved.ui || {};
+const persist = () => { try { localStorage.setItem(LS, JSON.stringify(saved)); } catch (e) {} };
+const toast = m => { try { showToast(m); } catch (e) {} };
+ 
+/* ---------------- CSS ---------------- */
+const css = document.createElement('style');
+css.textContent = `
+.ext-editing #ext-pill,.ext-editing #ext-crime{display:block!important}
+.ext-editing #mobile-controls{display:flex!important}
+.ext-editing #btn-mobile-pause,.ext-editing #btn-touch-launch{display:flex!important}
+.ext-editing #screen-hud .max-w-xs{display:block!important}
+.ext-editing .ext-mov{pointer-events:auto!important;outline:2px dashed #22d3ee;outline-offset:2px;cursor:move;touch-action:none;user-select:none;-webkit-user-select:none}
+.ext-editing .ext-sel{outline:3px solid #fde047!important}
+#ext-edit-bar{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:70;display:none;flex-wrap:wrap;gap:.5rem;align-items:center;justify-content:center;max-width:92vw;background:rgba(2,6,23,.94);border:2px solid #22d3ee;border-radius:12px;padding:.6rem .8rem;font:700 13px Rajdhani,sans-serif;color:#e2e8f0;box-shadow:0 0 30px rgba(0,210,255,.3)}
+#ext-edit-bar button{background:#1e293b;border:1px solid #475569;border-radius:6px;padding:.3rem .7rem;color:#fff;font:700 12px Rajdhani,sans-serif;text-transform:uppercase;letter-spacing:.05em;cursor:pointer}
+#ext-edit-bar button.go{background:#dc2626;border-color:#f87171}
+.xs-bind{background:#1e293b;border:1px solid #475569;border-radius:6px;padding:.2rem .6rem;min-width:84px;color:#67e8f9;font:700 12px monospace;cursor:pointer}
+.xs-bind.on{background:#dc2626;color:#fff;border-color:#fca5a5}`;
+document.head.appendChild(css);
+ 
+/* =====================================================================
+   1) DENSITY
+   ===================================================================== */
+const CL = window.CityLife;
+function applyDens() { if (CL) { CL.DENS.ped = saved.dens.ped / 100; CL.DENS.car = saved.dens.car / 100; } }
+applyDens();
+ 
+/* =====================================================================
+   2) KEY REBINDING  (re-maps physical keys to the game's original keys, so the original listeners are untouched)
+   ===================================================================== */
+const ACTIONS = [
+    { id: 'fwd', label: 'Move Forward', key: 'w', code: 'KeyW' },
+    { id: 'back', label: 'Move Backward', key: 's', code: 'KeyS' },
+    { id: 'left', label: 'Move Left', key: 'a', code: 'KeyA' },
+    { id: 'right', label: 'Move Right', key: 'd', code: 'KeyD' },
+    { id: 'jump', label: 'Jump / Wall Leap', key: ' ', code: 'Space' },
+    { id: 'sprint', label: 'Sprint Boost', key: 'Shift', code: 'ShiftLeft' },
+    { id: 'swing', label: 'Web Swing', key: 'e', code: 'KeyE' },
+    { id: 'launch', label: 'Manual Web Launch', key: 'f', code: 'KeyF' },
+    { id: 'punch', label: 'Punch / Kick', key: 'q', code: 'KeyQ' },
+    { id: 'time', label: 'Skip Time', key: 't', code: 'KeyT' },
+    { id: 'wx', label: 'Change Weather', key: 'y', code: 'KeyY' },
+    { id: 'pause', label: 'Pause', key: 'Escape', code: 'Escape' }
+];
+const bind = {};
+ACTIONS.forEach(a => { const v = saved.bind[a.id]; bind[a.id] = (typeof v === 'string' && v) ? v : a.code; });
+const NAMES = { Space: 'SPACE', ShiftLeft: 'L-SHIFT', ShiftRight: 'R-SHIFT', ControlLeft: 'L-CTRL', ControlRight: 'R-CTRL', AltLeft: 'L-ALT', AltRight: 'R-ALT', ArrowUp: '↑', ArrowDown: '↓', ArrowLeft: '←', ArrowRight: '→', Escape: 'ESC', Enter: 'ENTER', Tab: 'TAB', Backquote: '`', Minus: '-', Equal: '=', Comma: ',', Period: '.', Slash: '/', Semicolon: ';', Quote: "'", BracketLeft: '[', BracketRight: ']', Backslash: '\\' };
+const codeName = c => NAMES[c] || c.replace(/^Key/, '').replace(/^Digit/, '').replace(/^Numpad/, 'NUM ').toUpperCase();
+let listening = null, synth = false;
+ 
+function relay(e, a) {
+    synth = true;
+    try { window.dispatchEvent(new KeyboardEvent(e.type, { key: a.key, code: a.code, repeat: e.repeat, bubbles: true, cancelable: true })); }
+    finally { synth = false; }
+}
+function onKey(e) {
+    if (synth) return;
+    if (listening) {
+        e.preventDefault(); e.stopImmediatePropagation();
+        if (e.type === 'keydown') finishListen(e);
+        return;
+    }
+    const cur = ACTIONS.find(a => bind[a.id] === e.code);
+    if (cur) {
+        if (bind[cur.id] === cur.code) return;                    // untouched default -> original behaviour
+        e.preventDefault(); e.stopImmediatePropagation(); relay(e, cur); return;
+    }
+    if (ACTIONS.some(a => bind[a.id] !== a.code && a.code === e.code)) { e.preventDefault(); e.stopImmediatePropagation(); }   // old key of a rebound action
+}
+// clicking anywhere except a key button cancels a pending rebind (so game keys can never get stuck)
+window.addEventListener('click', e => { if (listening && !(e.target.closest && e.target.closest('.xs-bind'))) { listening = null; renderBinds(); } }, true);
+window.addEventListener('keydown', onKey, true);
+window.addEventListener('keyup', onKey, true);
+ 
+function finishListen(e) {
+    const a = listening; listening = null;
+    if (e.code === 'Escape' && a.id !== 'pause') { renderBinds(); return; }      // Esc cancels
+    const other = ACTIONS.find(x => x !== a && bind[x.id] === e.code);
+    if (other) bind[other.id] = bind[a.id];                                       // swap on conflict
+    bind[a.id] = e.code; saved.bind = Object.assign({}, bind); persist(); renderBinds();
+    toast('Bound ' + a.label + ' to ' + codeName(e.code));
+}
+function renderBinds() {
+    const box = $('xs-binds'); if (!box) return;
+    box.innerHTML = ACTIONS.map(a => '<div class="flex justify-between items-center gap-2 p-2 bg-slate-950/70 border border-slate-800 rounded text-xs"><span class="text-slate-300">' + a.label + '</span><button class="xs-bind' + (listening === a ? ' on' : '') + '" data-act="' + a.id + '">' + (listening === a ? 'PRESS KEY…' : codeName(bind[a.id])) + '</button></div>').join('');
+}
+ 
+/* =====================================================================
+   3) HUD LAYOUT EDITOR
+   ===================================================================== */
+const Q = s => document.querySelector(s);
+const MOV = [
+    { id: 'hp', label: 'Health panel', get: () => Q('#screen-hud > div:first-child > div:first-child') },
+    { id: 'speed', label: 'Speedometer', get: () => { const e = $('hud-speed-val'); return e && e.parentElement; } },
+    { id: 'map', label: 'Minimap', get: () => { const e = $('minimap-canvas'); return e && e.parentElement; } },
+    { id: 'pause', label: 'Pause button', get: () => $('btn-mobile-pause') },
+    { id: 'hints', label: 'Key hints', get: () => Q('#screen-hud .max-w-xs') },
+    { id: 'joy', label: 'Joystick', get: () => $('joystick-container') },
+    { id: 'swing', label: 'Swing button', get: () => $('btn-touch-swing') },
+    { id: 'zip', label: 'Zip button', get: () => $('btn-touch-zip') },
+    { id: 'jump', label: 'Jump button', get: () => $('btn-touch-jump') },
+    { id: 'launch', label: 'Launch button', get: () => $('btn-touch-launch') },
+    { id: 'punch', label: 'Punch button', get: () => $('btn-touch-punch') },
+    { id: 'pill', label: 'Clock / weather', get: () => $('ext-pill') },
+    { id: 'crime', label: 'Crime tracker', get: () => $('ext-crime') }
+];
+const ent = id => MOV.find(m => m.id === id);
+const U = id => (saved.ui[id] = saved.ui[id] || { x: 0, y: 0, s: 1 });
+function place(id) {
+    const m = ent(id), el = m && m.get(); if (!el) return;
+    const u = saved.ui[id] || { x: 0, y: 0, s: 1 };
+    el.style.translate = u.x + 'px ' + u.y + 'px';
+    el.style.scale = u.s !== 1 ? String(u.s) : '';
+}
+function clampEl(id) {                       // keep the element fully on screen (only when it's actually displayed)
+    const m = ent(id), el = m && m.get(); if (!el) return;
+    let r = el.getBoundingClientRect(); if (!r.width || !r.height) return;
+    const u = U(id); let dx = 0, dy = 0;
+    if (r.left < 0) dx = -r.left; else if (r.right > innerWidth) dx = innerWidth - r.right;
+    if (r.top < 0) dy = -r.top; else if (r.bottom > innerHeight) dy = innerHeight - r.bottom;
+    if (dx || dy) { u.x += dx; u.y += dy; place(id); }
+}
+const clampAll = () => MOV.forEach(m => clampEl(m.id));
+MOV.forEach(m => place(m.id));
+window.addEventListener('resize', clampAll);
+setInterval(clampAll, 1200);
+ 
+let editing = false, sel = null, drag = null;
+const bar = document.createElement('div'); bar.id = 'ext-edit-bar';
+bar.innerHTML = '<b style="color:#22d3ee">EDIT HUD</b><span id="xe-name" style="min-width:150px;text-align:center;color:#fde047">Drag any dashed element</span>' +
+    '<label style="display:flex;align-items:center;gap:.4rem">Size <input type="range" id="xe-scale" min="50" max="160" value="100" style="width:110px"></label>' +
+    '<button id="xe-reset-one">Reset this</button><button id="xe-reset-all">Reset all</button><button id="xe-done" class="go">Done</button>';
+document.body.appendChild(bar);
+ 
+function select(id) {
+    document.querySelectorAll('.ext-sel').forEach(e => e.classList.remove('ext-sel'));
+    sel = id;
+    const m = id && ent(id), el = m && m.get();
+    if (el) el.classList.add('ext-sel');
+    $('xe-name').textContent = m ? m.label : 'Drag any dashed element';
+    $('xe-scale').value = m ? Math.round(U(id).s * 100) : 100;
+    $('xe-scale').disabled = !m;
+}
+function startEdit() {
+    editing = true; document.body.classList.add('ext-editing');
+    $('screen-settings').classList.add('hidden'); $('screen-hud').classList.remove('hidden');
+    MOV.forEach(m => { const el = m.get(); if (el) { el.classList.add('ext-mov'); el.dataset.extId = m.id; } });
+    const pill = $('ext-pill'); if (pill && !pill.textContent) pill.textContent = '☀️ 12:00  ·  Clear  ·  🕷️ 0 stopped';
+    const cn = $('xc-name'); if (cn && !cn.textContent) { $('xc-icon').textContent = '🚨'; cn.textContent = 'CRIME TRACKER'; $('xc-dist').textContent = '120m NE'; $('xc-left').textContent = '3 suspects left'; }
+    bar.style.display = 'flex'; select(null);
+}
+function endEdit() {
+    editing = false; drag = null; document.body.classList.remove('ext-editing');
+    document.querySelectorAll('.ext-mov').forEach(e => e.classList.remove('ext-mov', 'ext-sel'));
+    bar.style.display = 'none'; clampAll(); persist();
+    $('screen-hud').classList.add('hidden'); $('screen-settings').classList.remove('hidden');
+}
+function resetLayout() { saved.ui = {}; MOV.forEach(m => place(m.id)); persist(); }
+ 
+// in edit mode, swallow the game's own handlers for the controls being dragged (so nothing fires / pauses)
+['mousedown', 'click', 'touchstart'].forEach(t => window.addEventListener(t, e => {
+    if (editing && e.target.closest && e.target.closest('.ext-mov')) { e.stopPropagation(); if (t === 'click') e.preventDefault(); }
+}, true));
+window.addEventListener('pointerdown', e => {
+    if (!editing) return;
+    const el = e.target.closest && e.target.closest('.ext-mov'); if (!el) return;
+    e.preventDefault(); const id = el.dataset.extId; select(id);
+    const u = U(id); drag = { id, sx: e.clientX, sy: e.clientY, ox: u.x, oy: u.y, pid: e.pointerId };
+    try { el.setPointerCapture(e.pointerId); } catch (_) {}
+}, true);
+window.addEventListener('pointermove', e => {
+    if (!drag || e.pointerId !== drag.pid) return;
+    const u = U(drag.id); u.x = drag.ox + e.clientX - drag.sx; u.y = drag.oy + e.clientY - drag.sy; place(drag.id); clampEl(drag.id);
+}, true);
+const endDrag = e => { if (drag && e.pointerId === drag.pid) { drag = null; persist(); } };
+window.addEventListener('pointerup', endDrag, true);
+window.addEventListener('pointercancel', endDrag, true);
+$('xe-scale').addEventListener('input', e => { if (!sel) return; U(sel).s = e.target.value / 100; place(sel); clampEl(sel); persist(); });
+$('xe-reset-one').addEventListener('click', () => { if (!sel) return; saved.ui[sel] = { x: 0, y: 0, s: 1 }; place(sel); select(sel); persist(); });
+$('xe-reset-all').addEventListener('click', () => { resetLayout(); select(null); });
+$('xe-done').addEventListener('click', endEdit);
+ 
+/* =====================================================================
+   SETTINGS SCREEN PANELS
+   ===================================================================== */
+const grid = Q('#screen-settings .max-w-4xl');
+if (grid) {
+    const box = 'md:col-span-2 bg-slate-900/80 border border-slate-800 rounded-xl p-4 sm:p-6 space-y-4';
+    const head = (c, icon, t) => '<h3 class="font-bold text-lg sm:text-xl ' + c + ' uppercase tracking-wider border-b border-slate-800 pb-2 flex items-center gap-2"><i class="fa-solid ' + icon + '"></i> ' + t + '</h3>';
+    const slider = (id, label) => '<div><div class="flex justify-between text-xs sm:text-sm font-semibold mb-2"><span class="text-slate-300">' + label + '</span><span id="' + id + '-txt" class="text-cyan-400"></span></div><input type="range" id="' + id + '" min="0" max="200" step="10" class="w-full accent-cyan-400 bg-slate-800 rounded-lg cursor-pointer"></div>';
+    grid.insertAdjacentHTML('beforeend',
+        '<div class="' + box + '">' + head('text-yellow-400', 'fa-city', 'City Population') +
+        (CL ? '<div class="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-8">' + slider('xs-ped', 'Pedestrian Density') + slider('xs-car', 'AI Traffic Density') + '</div><div class="text-[10px] sm:text-xs text-slate-400">100% is the default. Lower it for better performance, raise it for a busier city.</div>'
+            : '<div class="text-xs text-red-300">City-life add-on not found. Paste spiderman-city-life-addon.js before this file.</div>') + '</div>' +
+        '<div class="' + box + '">' + head('text-cyan-400', 'fa-keyboard', 'Custom Key Bindings') +
+        '<div class="text-[10px] sm:text-xs text-slate-400">Click a key, then press the new one (Esc cancels). Binding a key that is already used swaps the two.</div><div id="xs-binds" class="grid grid-cols-1 sm:grid-cols-2 gap-2"></div>' +
+        '<button id="xs-reset-binds" class="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white font-bold rounded uppercase tracking-wider text-xs border border-slate-600">Reset Keys</button></div>' +
+        '<div class="' + box + '">' + head('text-red-500', 'fa-up-down-left-right', 'HUD Layout') +
+        '<div class="text-[10px] sm:text-xs text-slate-400">Drag any HUD element or touch control where you like, and resize it with the slider. Tap Done when finished.</div>' +
+        '<div class="flex flex-wrap gap-3"><button id="xs-edit-hud" class="px-5 py-2.5 bg-red-600 hover:bg-red-500 text-white font-extrabold rounded uppercase tracking-wider text-sm">Edit HUD Layout</button>' +
+        '<button id="xs-reset-hud" class="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-white font-bold rounded uppercase tracking-wider text-xs border border-slate-600">Reset Layout</button></div></div>');
+ 
+    if (CL) {
+        [['xs-ped', 'ped', 'BASE'], ['xs-car', 'car', 'BASE']].forEach(([id, k]) => {
+            const s = $(id), t = $(id + '-txt'); s.value = saved.dens[k];
+            const show = () => { t.textContent = saved.dens[k] + '%  (' + Math.round(CL.BASE[k] * saved.dens[k] / 100) + ')'; };
+            show();
+            s.addEventListener('input', e => { saved.dens[k] = +e.target.value; applyDens(); show(); persist(); });
+        });
+    }
+    renderBinds();
+    $('xs-binds').addEventListener('click', e => {
+        const b = e.target.closest('.xs-bind'); if (!b) return;
+        listening = ACTIONS.find(a => a.id === b.dataset.act); renderBinds();
+    });
+    $('xs-reset-binds').addEventListener('click', () => { ACTIONS.forEach(a => bind[a.id] = a.code); saved.bind = {}; listening = null; persist(); renderBinds(); toast('Keys reset to default'); });
+    $('xs-edit-hud').addEventListener('click', startEdit);
+    $('xs-reset-hud').addEventListener('click', () => { resetLayout(); toast('HUD layout reset'); });
+}
 })();
     </script>
 </body>
